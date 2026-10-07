@@ -1,0 +1,33 @@
+# Codemagic — Android APK для Termux+ (1mix667/termux-ai-app).
+# Подключение: codemagic.io → Add application → GitHub → этот репозиторий →
+# "Use codemagic.yaml" → выбрать ветку main → запустить workflow android-apk.
+# APK придёт письмом и будет в артефактах сборки.
+#
+# Требования проекта: AGP 8.7.0 (JDK 17+), compileSdk/targetSdk 36,
+# NDK r28.2.13676358 (16KB page-size фикс для Android 16 в CMakeLists.txt),
+# CMake 3.22.1. Сборка debug — подписан debug-ключом, готова к sideload.
+
+workflows:
+  android-apk:
+    name: Termux+ — Android APK
+    instance_type: linux_x2
+    max_build_duration: 60
+    environment:
+      java: 17
+    scripts:
+      - name: Проверить/доустановить Android SDK 36 и NDK r28
+        script: |
+          set -e
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358" "cmake;3.22.1" || true
+          sdkmanager --list_installed | grep -E "android-36|ndk|cmake" || true
+      - name: Gradle assembleDebug
+        script: |
+          chmod +x gradlew
+          ./gradlew :app:assembleDebug --no-daemon --stacktrace
+      - name: Переименовать APK
+        script: |
+          mkdir -p apk-artifacts
+          cp "$(find app/build/outputs/apk/debug -name '*.apk' | head -n1)" apk-artifacts/TermuxPlus.apk
+          ls -lh apk-artifacts/TermuxPlus.apk
+    artifacts:
+      - apk-artifacts/TermuxPlus.apk
