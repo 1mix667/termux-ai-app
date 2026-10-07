@@ -2,6 +2,9 @@
 <full-backup-content>
     <!-- Exclude sensitive credentials and encrypted data from backup -->
 
+    <!-- Include shared preferences, except sensitive ones excluded below -->
+    <include domain="sharedpref" path="." />
+
     <!-- Encrypted credentials (API keys, tokens, session IDs) -->
     <exclude domain="sharedpref" path="termux_ai_prefs.xml" />
 
@@ -17,7 +20,6 @@
     <!-- Exclude logs that may contain sensitive command output -->
     <exclude domain="file" path="logs/" />
     <exclude domain="file" path="temp/" />
-    <exclude domain="cache" path="." />
 
     <!-- Include non-sensitive user settings and data -->
     <include domain="file" path="." />

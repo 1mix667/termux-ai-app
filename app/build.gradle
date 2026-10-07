@@ -5,13 +5,13 @@ plugins {
 
 android {
     namespace 'com.termux.ai'
-    compileSdk 34
-    ndkVersion "27.3.13750724"
+    compileSdk 36
+    ndkVersion "28.2.13676358"
 
     defaultConfig {
         applicationId "com.termux.ai"
         minSdk 24
-        targetSdk 34
+        targetSdk 36
         versionCode 1
         versionName "2.0.0"
 

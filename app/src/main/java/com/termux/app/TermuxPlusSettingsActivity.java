@@ -129,6 +129,12 @@ public class TermuxPlusSettingsActivity extends AppCompatActivity {
             startActivity(intent);
         });
 
+        Button btnManageAiProviders = findViewById(R.id.btn_manage_ai_providers);
+        btnManageAiProviders.setOnClickListener(v -> {
+            android.content.Intent intent = new android.content.Intent(this, com.termux.ai.AIProviderSettingsActivity.class);
+            startActivity(intent);
+        });
+
         setupModelSpinner();
         setupThemeListeners();
         loadSettings();

@@ -2,7 +2,8 @@
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:fitsSystemWindows="true">
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -33,6 +34,15 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Manage Plugins"
+            android:drawableStart="@drawable/ic_settings"
+            android:layout_marginBottom="8dp" />
+
+        <Button
+            android:id="@+id/btn_manage_ai_providers"
+            style="@style/Widget.Material3.Button.OutlinedButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Manage AI Providers"
             android:drawableStart="@drawable/ic_settings"
             android:layout_marginBottom="24dp" />
 

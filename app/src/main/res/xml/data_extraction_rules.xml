@@ -5,6 +5,9 @@
     <cloud-backup disableIfNoEncryptionCapabilities="true">
         <!-- Exclude ALL credentials and sensitive data from cloud backup -->
 
+        <!-- Include shared preferences, except sensitive ones excluded below -->
+        <include domain="sharedpref" path="." />
+
         <!-- Exclude encrypted credentials -->
         <exclude domain="sharedpref" path="termux_ai_prefs.xml" />
         <exclude domain="sharedpref" path="__androidx_security_crypto_encrypted_prefs__.xml" />
@@ -15,7 +18,6 @@
         <!-- Exclude logs and temporary files -->
         <exclude domain="file" path="logs/" />
         <exclude domain="file" path="temp/" />
-        <exclude domain="cache" path="." />
 
         <!-- Include non-sensitive application data -->
         <include domain="database" path="." />
@@ -25,6 +27,9 @@
     <device-transfer>
         <!-- For device-to-device transfer, exclude credentials but allow settings -->
 
+        <!-- Include shared preferences, except sensitive ones excluded below -->
+        <include domain="sharedpref" path="." />
+
         <!-- CRITICAL: Exclude credentials from device transfer -->
         <exclude domain="sharedpref" path="termux_ai_prefs.xml" />
         <exclude domain="sharedpref" path="__androidx_security_crypto_encrypted_prefs__.xml" />
@@ -33,7 +38,6 @@
         <!-- Exclude temporary and cache data -->
         <exclude domain="file" path="logs/" />
         <exclude domain="file" path="temp/" />
-        <exclude domain="cache" path="." />
 
         <!-- Include non-sensitive data -->
         <include domain="file" path="." />

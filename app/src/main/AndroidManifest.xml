@@ -97,6 +97,21 @@
             android:parentActivityName="com.termux.app.TermuxPlusSettingsActivity"
             android:theme="@style/Theme.TermuxPlus" />
 
+        <!-- AI Provider Settings (custom AI backends) -->
+        <activity
+            android:name="com.termux.ai.AIProviderSettingsActivity"
+            android:exported="false"
+            android:label="AI Providers"
+            android:parentActivityName="com.termux.app.TermuxPlusSettingsActivity"
+            android:theme="@style/Theme.TermuxPlus" />
+
+        <activity
+            android:name="com.termux.ai.AIProviderEditActivity"
+            android:exported="false"
+            android:label="Edit AI Provider"
+            android:parentActivityName="com.termux.ai.AIProviderSettingsActivity"
+            android:theme="@style/Theme.TermuxPlus" />
+
         <!-- Claude Code Setup Activity -->
         <activity
             android:name="com.termux.ai.ClaudeSetupActivity"

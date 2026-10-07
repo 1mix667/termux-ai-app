@@ -34,3 +34,11 @@ target_compile_options(termux PRIVATE
     -Werror
     -fvisibility=hidden
 )
+
+# 16 KB page size support: required on Android 15+ devices that use 16 KB
+# memory pages (and enforced for apps targeting Android 16 / API 36).
+# Without this the dynamic linker fails to load libtermux.so with
+# "dlopen failed: ... is not page-aligned" -> UnsatisfiedLinkError -> crash.
+target_link_options(termux PRIVATE
+    "-Wl,-z,max-page-size=16384"
+)

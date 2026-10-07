@@ -14,6 +14,8 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 
 import java.io.IOException;
+import java.net.URLEncoder;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import okhttp3.Call;
@@ -28,10 +30,18 @@ import okhttp3.WebSocket;
 import okhttp3.WebSocketListener;
 
 /**
- * AI Client for Claude and Gemini integration in Termux
- * 
+ * AI Client for Termux with pluggable AI providers.
+ *
+ * Provider routing:
+ * - "claude" builtin: original OAuth flow on claude.ai/api (unchanged)
+ * - "gemini" builtin: original Gemini REST flow (unchanged)
+ * - any other provider (built-in OpenAI-compatible presets or user-defined):
+ *   OpenAI-compatible {@code /v1/chat/completions} request
+ *
+ * The active provider is resolved from {@link AIProviderStore} on every call.
+ *
  * Handles:
- * - Authentication with Claude API / Gemini API Key
+ * - Authentication with Claude API / Gemini API Key / custom provider keys
  * - Real-time command analysis
  * - Context-aware suggestions
  * - Error diagnostics
@@ -42,7 +52,7 @@ public class AIClient {
     private static final String PREFS_NAME = "termux_ai_prefs";
     private static final String PREF_AUTH_TOKEN = "auth_token";
     private static final String PREF_SESSION_ID = "session_id";
-    private static final String PREF_AI_PROVIDER = "ai_provider";
+    // NOTE: the active provider id ("ai_provider" key) is owned by AIProviderStore now.
     private static final String PREF_GEMINI_API_KEY = "gemini_api_key";
     
     public static final String CLAUDE_API_BASE_URL = "https://claude.ai/api";
@@ -59,7 +69,10 @@ public class AIClient {
     private String authToken;
     private String sessionId;
     private String geminiApiKey;
-    private String currentProvider; // "claude" or "gemini"
+    private String currentProvider; // active provider id ("claude", "gemini", or a custom id)
+
+    private AIProviderStore providerStore;
+    private AIProviderConfig activeProvider;
 
     private WebSocket webSocket;
     private AIClientListener listener;
@@ -131,7 +144,36 @@ public class AIClient {
         authToken = prefs.getString(PREF_AUTH_TOKEN, null);
         sessionId = prefs.getString(PREF_SESSION_ID, null);
         geminiApiKey = prefs.getString(PREF_GEMINI_API_KEY, null);
-        currentProvider = prefs.getString(PREF_AI_PROVIDER, "claude");
+
+        // Resolve the active provider (legacy "claude"/"gemini" values keep working:
+        // they are the ids of the built-in presets).
+        providerStore = AIProviderStore.getInstance(context);
+        currentProvider = providerStore.getActiveProviderId();
+        activeProvider = providerStore.getActiveProvider();
+    }
+
+    /**
+     * Returns the currently active provider configuration. Never null.
+     */
+    @NonNull
+    public AIProviderConfig getActiveProvider() {
+        loadAuthenticationData();
+        return activeProvider;
+    }
+
+    private boolean isClaudeProvider() {
+        return activeProvider != null
+                && activeProvider.getKind() == AIProviderConfig.ProviderKind.CLAUDE;
+    }
+
+    private boolean isGeminiProvider() {
+        return activeProvider != null
+                && activeProvider.getKind() == AIProviderConfig.ProviderKind.GEMINI;
+    }
+
+    private boolean isOpenAICompatibleProvider() {
+        return activeProvider != null
+                && activeProvider.getKind() == AIProviderConfig.ProviderKind.OPENAI_COMPATIBLE;
     }
     
     private void saveAuthenticationData() {
@@ -143,10 +185,25 @@ public class AIClient {
     }
     
     public boolean isAuthenticated() {
-        if ("gemini".equals(currentProvider)) {
+        if (activeProvider == null) {
+            loadAuthenticationData();
+        }
+        if (activeProvider == null || !activeProvider.isEnabled()) {
+            return false;
+        }
+        if (isGeminiProvider()) {
             return geminiApiKey != null && !geminiApiKey.isEmpty();
         }
-        return authToken != null && !authToken.isEmpty();
+        if (isClaudeProvider()) {
+            return authToken != null && !authToken.isEmpty();
+        }
+        // OpenAI-compatible provider: local servers without auth are always ready,
+        // otherwise an API key is required.
+        if (activeProvider.getAuthScheme() == AIProviderConfig.AuthScheme.NONE) {
+            return true;
+        }
+        String apiKey = activeProvider.getApiKey();
+        return apiKey != null && !apiKey.isEmpty();
     }
     
     /**
@@ -219,8 +276,10 @@ public class AIClient {
             return;
         }
         
-        if ("gemini".equals(currentProvider)) {
+        if (isGeminiProvider()) {
             analyzeCommandGemini(filteredCommand, filteredContext, callback);
+        } else if (isOpenAICompatibleProvider()) {
+            analyzeCommandOpenAI(filteredCommand, filteredContext, activeProvider, callback);
         } else {
             analyzeCommandClaude(filteredCommand, filteredContext, callback);
         }
@@ -307,8 +366,10 @@ public class AIClient {
             return;
         }
         
-        if ("gemini".equals(currentProvider)) {
+        if (isGeminiProvider()) {
             analyzeErrorGemini(filteredCommand, filteredError, filteredContext, callback);
+        } else if (isOpenAICompatibleProvider()) {
+            analyzeErrorOpenAI(filteredCommand, filteredError, filteredContext, activeProvider, callback);
         } else {
             analyzeErrorClaude(filteredCommand, filteredError, filteredContext, callback);
         }
@@ -391,8 +452,10 @@ public class AIClient {
             return;
         }
 
-        if ("gemini".equals(currentProvider)) {
+        if (isGeminiProvider()) {
             generateCodeGemini(filteredDescription, language, filteredContext, callback);
+        } else if (isOpenAICompatibleProvider()) {
+            generateCodeOpenAI(filteredDescription, language, filteredContext, activeProvider, callback);
         } else {
             generateCodeClaude(filteredDescription, language, filteredContext, callback);
         }
@@ -455,6 +518,256 @@ public class AIClient {
             }
         }, error -> mainHandler.post(() -> callback.onError(error)));
     }
+
+    // ------------------------------------------------------------------ //
+    // OpenAI-compatible providers (custom providers and built-in presets
+    // such as OpenAI, DeepSeek, OpenRouter, Groq, Ollama, llama.cpp)
+    // ------------------------------------------------------------------ //
+
+    private void analyzeCommandOpenAI(String command, String context,
+                                     AIProviderConfig provider, AnalysisCallback callback) {
+        String prompt = "Analyze this shell command: " + command + "\nContext: " + context +
+                "\nProvide a suggestion for improvement or a brief explanation. " +
+                "Return ONLY JSON with 'suggestion' (string) and 'confidence' (float 0.0-1.0) fields. " +
+                "No markdown, no extra text.";
+
+        sendOpenAICompatibleRequest(provider, prompt, new OpenAIStringCallback() {
+            @Override
+            public void onSuccess(String content) {
+                try {
+                    JsonObject json = parseJsonContent(content);
+                    String suggestion = json.get("suggestion").getAsString();
+                    float confidence = json.has("confidence")
+                            ? json.get("confidence").getAsFloat() : 0.8f;
+
+                    mainHandler.post(() -> {
+                        callback.onSuggestion(suggestion, confidence);
+                        if (listener != null) listener.onSuggestionReceived(suggestion, confidence);
+                    });
+                } catch (Exception e) {
+                    mainHandler.post(() -> callback.onError("Failed to parse AI response: " + e.getMessage()));
+                }
+            }
+
+            @Override
+            public void onError(String error) {
+                mainHandler.post(() -> callback.onError(error));
+            }
+        });
+    }
+
+    private void analyzeErrorOpenAI(String command, String errorOutput, String context,
+                                    AIProviderConfig provider, ErrorCallback callback) {
+        String prompt = "Command: " + command + "\nError: " + errorOutput + "\nContext: " + context +
+                "\nAnalyze this shell error and provide solutions. " +
+                "Return ONLY JSON with 'analysis' (string) and 'solutions' (string array) fields. " +
+                "No markdown, no extra text.";
+
+        sendOpenAICompatibleRequest(provider, prompt, new OpenAIStringCallback() {
+            @Override
+            public void onSuccess(String content) {
+                try {
+                    JsonObject json = parseJsonContent(content);
+                    String analysis = json.get("analysis").getAsString();
+                    String[] solutions = gson.fromJson(json.get("solutions"), String[].class);
+
+                    mainHandler.post(() -> {
+                        callback.onAnalysis(analysis, solutions);
+                        if (listener != null) listener.onErrorAnalysis(errorOutput, analysis, solutions);
+                    });
+                } catch (Exception e) {
+                    mainHandler.post(() -> callback.onError("Failed to parse AI response: " + e.getMessage()));
+                }
+            }
+
+            @Override
+            public void onError(String error) {
+                mainHandler.post(() -> callback.onError(error));
+            }
+        });
+    }
+
+    private void generateCodeOpenAI(String description, String language, String context,
+                                    AIProviderConfig provider, CodeCallback callback) {
+        String prompt = "Write " + language + " code for: " + description + "\nContext: " + context +
+                "\nReturn ONLY JSON with 'code' (string) and 'language' (string) fields. " +
+                "No markdown, no extra text.";
+
+        sendOpenAICompatibleRequest(provider, prompt, new OpenAIStringCallback() {
+            @Override
+            public void onSuccess(String content) {
+                try {
+                    JsonObject json = parseJsonContent(content);
+                    String code = json.get("code").getAsString();
+                    String detectedLanguage = json.has("language")
+                            ? json.get("language").getAsString() : language;
+
+                    mainHandler.post(() -> {
+                        callback.onCodeGenerated(code, detectedLanguage);
+                        if (listener != null) listener.onCodeGenerated(code, detectedLanguage);
+                    });
+                } catch (Exception e) {
+                    mainHandler.post(() -> callback.onError("Failed to parse AI response: " + e.getMessage()));
+                }
+            }
+
+            @Override
+            public void onError(String error) {
+                mainHandler.post(() -> callback.onError(error));
+            }
+        });
+    }
+
+    /**
+     * Send a chat completion request to an OpenAI-compatible endpoint.
+     *
+     * POSTs {@code baseUrl + endpointPath} with a
+     * {@code {model, messages, temperature, max_tokens}} body, authorizes per the
+     * provider's {@link AIProviderConfig.AuthScheme}, and returns
+     * {@code choices[0].message.content} via the callback.
+     */
+    private void sendOpenAICompatibleRequest(@NonNull AIProviderConfig provider,
+                                             @NonNull String userPrompt,
+                                             @NonNull OpenAIStringCallback callback) {
+        try {
+            String url = joinUrl(provider.getBaseUrl(), provider.getEndpointPath());
+            String apiKey = provider.getApiKey();
+
+            // QUERY_PARAM auth goes into the URL.
+            if (provider.getAuthScheme() == AIProviderConfig.AuthScheme.QUERY_PARAM
+                    && apiKey != null && !apiKey.isEmpty()) {
+                url += (url.contains("?") ? "&" : "?")
+                        + "api_key=" + URLEncoder.encode(apiKey, "UTF-8");
+            }
+
+            JsonObject systemMessage = new JsonObject();
+            systemMessage.addProperty("role", "system");
+            String systemPrompt = provider.getSystemPrompt();
+            systemMessage.addProperty("content", systemPrompt != null ? systemPrompt : "");
+
+            JsonObject userMessage = new JsonObject();
+            userMessage.addProperty("role", "user");
+            userMessage.addProperty("content", userPrompt);
+
+            JsonArray messages = new JsonArray();
+            messages.add(systemMessage);
+            messages.add(userMessage);
+
+            JsonObject requestBody = new JsonObject();
+            String model = provider.getModel();
+            requestBody.addProperty("model", model != null ? model : "");
+            requestBody.add("messages", messages);
+            requestBody.addProperty("temperature", provider.getTemperature());
+            requestBody.addProperty("max_tokens", provider.getMaxTokens());
+
+            Request.Builder requestBuilder = new Request.Builder().url(url);
+
+            if (apiKey != null && !apiKey.isEmpty()) {
+                switch (provider.getAuthScheme()) {
+                    case BEARER:
+                    case OAUTH_BEARER:
+                        requestBuilder.addHeader("Authorization", "Bearer " + apiKey);
+                        break;
+                    case X_API_KEY:
+                        requestBuilder.addHeader("x-api-key", apiKey);
+                        break;
+                    case QUERY_PARAM:
+                    case NONE:
+                        // Handled above / not needed.
+                        break;
+                }
+            }
+
+            Map<String, String> customHeaders = provider.getCustomHeaders();
+            if (customHeaders != null) {
+                for (Map.Entry<String, String> entry : customHeaders.entrySet()) {
+                    if (entry.getKey() != null && entry.getValue() != null) {
+                        requestBuilder.addHeader(entry.getKey(), entry.getValue());
+                    }
+                }
+            }
+
+            Request request = requestBuilder
+                    .post(RequestBody.create(gson.toJson(requestBody), JSON))
+                    .build();
+
+            httpClient.newCall(request).enqueue(new Callback() {
+                @Override
+                public void onFailure(@NonNull Call call, @NonNull IOException e) {
+                    callback.onError("Request failed: " + e.getMessage());
+                }
+
+                @Override
+                public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
+                    if (response.isSuccessful()) {
+                        String responseBody = response.body().string();
+                        try {
+                            callback.onSuccess(parseOpenAICompatibleResponse(responseBody));
+                        } catch (Exception e) {
+                            callback.onError("Failed to parse AI response: " + e.getMessage());
+                        }
+                    } else {
+                        String errorBody = "";
+                        try {
+                            errorBody = response.body().string();
+                        } catch (Exception ignored) {
+                            // Keep the status code as the error detail.
+                        }
+                        callback.onError("Request failed: " + response.code()
+                                + (errorBody.isEmpty() ? "" : " " + errorBody));
+                    }
+                }
+            });
+        } catch (Exception e) {
+            callback.onError("Failed to build request: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Extract {@code choices[0].message.content} from a chat-completions response.
+     */
+    @NonNull
+    private String parseOpenAICompatibleResponse(@NonNull String responseBody) {
+        JsonObject response = gson.fromJson(responseBody, JsonObject.class);
+        JsonArray choices = response.getAsJsonArray("choices");
+        if (choices == null || choices.size() == 0) {
+            throw new RuntimeException("No choices in AI response");
+        }
+        JsonObject message = choices.get(0).getAsJsonObject().getAsJsonObject("message");
+        if (message == null || !message.has("content")) {
+            throw new RuntimeException("No message content in AI response");
+        }
+        return message.get("content").getAsString();
+    }
+
+    /**
+     * Parse model JSON output, tolerating markdown code fences.
+     */
+    @NonNull
+    private JsonObject parseJsonContent(@NonNull String text) {
+        text = text.trim();
+        if (text.startsWith("```json")) {
+            text = text.substring(7);
+        } else if (text.startsWith("```")) {
+            text = text.substring(3);
+        }
+        if (text.endsWith("```")) {
+            text = text.substring(0, text.length() - 3);
+        }
+        return gson.fromJson(text.trim(), JsonObject.class);
+    }
+
+    /**
+     * Join base URL and endpoint path without producing duplicate slashes.
+     */
+    @NonNull
+    private static String joinUrl(@Nullable String baseUrl, @Nullable String endpointPath) {
+        String base = baseUrl != null ? baseUrl.trim() : "";
+        String path = endpointPath != null ? endpointPath.trim() : "";
+        while (base.endsWith("/")) base = base.substring(0, base.length() - 1);
+        if (!path.isEmpty() && !path.startsWith("/")) path = "/" + path;
+        return base + path;
+    }
     
     /**
      * Start real-time AI assistance session
@@ -471,8 +784,9 @@ public class AIClient {
             return;
         }
         
-        if ("gemini".equals(currentProvider)) {
-            Log.d(TAG, "Real-time session not supported for Gemini via REST");
+        // Real-time WebSocket session is only supported by the Claude provider.
+        if (!isClaudeProvider()) {
+            Log.d(TAG, "Real-time session not supported for provider: " + currentProvider);
             // Optionally, we could simulate it or use a different mechanism.
             // For now, just notifying connected to simulate success.
             mainHandler.post(() -> {
@@ -561,7 +875,8 @@ public class AIClient {
      * Send real-time context update
      */
     public void sendContextUpdate(String workingDirectory, String currentCommand, String[] recentCommands) {
-        if ("gemini".equals(currentProvider)) return; // Not supported for Gemini REST
+        // Real-time context updates are only supported by the Claude provider.
+        if (!isClaudeProvider()) return;
 
         if (webSocket == null) return;
         
@@ -723,6 +1038,11 @@ public class AIClient {
     
     private interface RequestCallback {
         void onSuccess(JsonObject response);
+        void onError(String error);
+    }
+
+    private interface OpenAIStringCallback {
+        void onSuccess(String content);
         void onError(String error);
     }
 }
