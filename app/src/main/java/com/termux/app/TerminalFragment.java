@@ -110,6 +110,11 @@ public class TerminalFragment extends Fragment implements TerminalSessionClient 
     }
     
     private void setupTerminalView() {
+        // The TerminalRenderer is created by setTextSize(); it must exist before
+        // attachSession() + the first layout pass, otherwise TerminalView.updateSize()
+        // crashes with NPE (mRenderer == null). 12sp matches upstream Termux default.
+        terminalView.setTextSize(12);
+
         // Disable autofill for the terminal view
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             terminalView.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
@@ -117,7 +122,7 @@ public class TerminalFragment extends Fragment implements TerminalSessionClient 
 
         // Enable Gboard autocomplete based on settings
         if (getContext() != null) {
-            SharedPreferences prefs = com.termux.ai.EncryptedPreferencesManager.getEncryptedPrefs(getContext(), "termux_plus_prefs");
+            SharedPreferences prefs = com.termux.ai.EncryptedPreferencesManager.getEncryptedPrefsOrFallback(getContext(), "termux_plus_prefs");
             boolean autoCorrectEnabled = prefs.getBoolean(TermuxPlusSettingsActivity.PREF_KEYBOARD_AUTOCORRECT, true);
             terminalView.setGboardAutoCompleteEnabled(autoCorrectEnabled);
         } else {

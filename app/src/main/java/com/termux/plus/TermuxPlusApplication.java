@@ -38,8 +38,10 @@ public class TermuxPlusApplication extends Application {
 
         Log.d(TAG, "Initializing Termux+ v" + BuildConfig.VERSION_NAME);
 
-        // Initialize secure preferences
-        preferences = EncryptedPreferencesManager.getEncryptedPrefs(this, PREFS_NAME);
+        // Initialize secure preferences. termux_plus_prefs holds only non-sensitive
+        // UI settings, so use the fallback variant: a KeyStore failure must not
+        // crash the app on every launch.
+        preferences = EncryptedPreferencesManager.getEncryptedPrefsOrFallback(this, PREFS_NAME);
 
         // Apply Material You 3 Dynamic Colors
         boolean dynamicColorsEnabled = preferences.getBoolean(PREF_DYNAMIC_COLORS, true);

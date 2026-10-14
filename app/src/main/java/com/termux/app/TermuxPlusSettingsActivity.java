@@ -76,8 +76,8 @@ public class TermuxPlusSettingsActivity extends AppCompatActivity {
             getSupportActionBar().setDisplayHomeAsUpEnabled(true);
         }
 
-        // Use encrypted preferences for all settings to ensure security
-        prefs = com.termux.ai.EncryptedPreferencesManager.getEncryptedPrefs(this, PREFS_NAME);
+        // UI settings are non-sensitive: never crash the settings screen on KeyStore failure
+        prefs = com.termux.ai.EncryptedPreferencesManager.getEncryptedPrefsOrFallback(this, PREFS_NAME);
         app = (TermuxPlusApplication) getApplication();
 
         // Theme settings

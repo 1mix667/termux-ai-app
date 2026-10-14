@@ -53,6 +53,27 @@ public class EncryptedPreferencesManager {
     }
 
     /**
+     * Get encrypted SharedPreferences, falling back to plaintext SharedPreferences
+     * if the Android KeyStore / MasterKey setup fails.
+     *
+     * Use this ONLY for non-sensitive preferences (UI settings, feature flags).
+     * Secret material (API keys, tokens) must keep using {@link #getEncryptedPrefs}
+     * and fail loudly rather than land in plaintext.
+     *
+     * @param context Application context
+     * @param prefName Name of the preferences file
+     * @return Encrypted SharedPreferences, or plaintext fallback on KeyStore failure
+     */
+    public static SharedPreferences getEncryptedPrefsOrFallback(Context context, String prefName) {
+        try {
+            return getEncryptedPrefs(context, prefName);
+        } catch (RuntimeException e) {
+            Log.w(TAG, "KeyStore unavailable, falling back to plaintext prefs: " + prefName, e);
+            return context.getSharedPreferences(prefName + "_fallback", Context.MODE_PRIVATE);
+        }
+    }
+
+    /**
      * Migrate existing plaintext preferences to encrypted storage.
      *
      * @param context Application context
